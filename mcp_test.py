@@ -255,10 +255,6 @@ async def qradar_get_filtered_offenses() -> str:
                 print(f"offense_id {offense_id} 처리 중 오류: {str(e)}")
                 continue
 
-        # 결과 저장 (두 번째 코드와 동일)
-        with open("integrated_offense_data.json", "w", encoding="utf-8") as f:
-            json.dump(integrated_data_list, f, ensure_ascii=False, indent=4)
-        
         return json.dumps({
             "processed_count": len(integrated_data_list),
             "total_filtered": len(offense_ids),
