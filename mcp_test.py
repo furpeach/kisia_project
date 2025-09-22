@@ -1,24 +1,30 @@
-# rest api를 사용하기 위한 모듈
-import requests
-import urllib3
+from fastmcp import FastMCP
+from datetime import datetime
+from dotenv import load_dotenv
 import json
+import os
+import httpx
+import asyncio
 from typing import List, Dict, Optional
-
-# 출력 detail
-import pprint
 from tqdm import tqdm
-import time
 
-# decoding_hex 불러오기
+# decoding_hex 불러오기 (기존 모듈 사용)
 from decoding_hex import HexDecoder
 
-from urllib3.exceptions import InsecureRequestWarning
-urllib3.disable_warnings(InsecureRequestWarning)
+load_dotenv()
 
-class APIClient:
-    def __init__(self, base_url, sec_token):
+# 환경변수에서 QRadar 설정 로드
+# URL_BASE = os.getenv("QRADAR_BASE_URL")
+URL_BASE = "https://112.216.102.242:443"
+SEC_TOKEN = "2cd1c231-78c8-4a4f-a972-6a3ab909d879"
+# SEC_TOKEN = os.getenv("QRADAR_SEC_TOKEN")
+
+mcp = FastMCP("QRadar MCP Server")
+
+class AsyncQRadarClient:
+    def __init__(self, base_url: str, sec_token: str):
         self.base_url = base_url
-        self.header = {
+        self.headers = {
             'SEC': sec_token,
             'Content-Type': 'application/json',
             'accept': 'application/json'
@@ -33,126 +39,208 @@ class APIClient:
             'rules': '/api/analytics/rules/{}'
         }
 
-    def get(self, endpoint_name, offense_id=None):
+    async def get(self, endpoint_name: str, offense_id: Optional[str] = None) -> dict:
+        """비동기 GET 요청"""
         if offense_id:
             url = f"{self.base_url}{self.endpoints[endpoint_name].format(offense_id)}"
         else:
             url = f"{self.base_url}{self.endpoints[endpoint_name]}"
         
-        r = requests.get(url, headers=self.header, verify=False)
-        return r.json()
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            try:
+                response = await client.get(url, headers=self.headers)
+                # 응답 상태코드 확인
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                return {"error": str(e)}
 
-    def post(self, endpoint_name, param):
+    async def post(self, endpoint_name: str, param: str) -> dict:
+        """비동기 POST 요청"""
         if endpoint_name == 'search':
             url = f"{self.base_url}{self.endpoints[endpoint_name]}?query_expression={param}"
         else:
             url = f"{self.base_url}{self.endpoints[endpoint_name].format(param)}"
         
-        resopnse = requests.post(url, headers=self.header, verify=False).json()
-        return resopnse
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            try:
+                response = await client.post(url, headers=self.headers)
+                # 응답 상태코드 확인
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                return {"error": str(e)}
 
-    def create_logsourceid_aql(self, start_time, last_updated_time):
+    def create_logsourceid_aql(self, start_time: int, last_updated_time: int) -> str:
+        """AQL 쿼리 생성"""
         return f"SELECT UTF8(payload), QID FROM events WHERE logsourceid = 163 AND QID = 1002750255 START {start_time} STOP {last_updated_time}"
 
-def get_rule_name(client, rule_id):
-    # rule id-name 매칭
-    detail_rule_id = client.get('rules', rule_id)
-    return detail_rule_id['name']
+# 전역 클라이언트 인스턴스
+client = AsyncQRadarClient(URL_BASE, SEC_TOKEN) if URL_BASE and SEC_TOKEN else None
 
-def get_events_with_payload(client, start_time, last_updated_time, decoder):
-    # 시간 범위로 이벤트 조회 및 payload 디코딩
-    # AQL 쿼리 생성
-    aql_query = client.create_logsourceid_aql(start_time, last_updated_time)
+@mcp.tool()
+async def qradar_api_test() -> str:
+    """QRadar API 연결 테스트"""
+    if not client:
+        return json.dumps({"error": "QRadar 클라이언트가 설정되지 않았습니다. 환경변수를 확인하세요."}, indent=2)
     
-    # 검색 요청
-    search_response = client.post('search', aql_query)
-    cursor_id = search_response['cursor_id']
+    response = await client.get('about')
+    return json.dumps(response, indent=2)
 
-    while True:
-        status_response = client.get('search_status', cursor_id)
-        if status_response['status'] == 'COMPLETED':
-            break
-        time.sleep(0.5)
+@mcp.tool()
+async def qradar_get_offenses() -> str:
+    """QRadar offense 목록 조회"""
+    if not client:
+        return json.dumps({"error": "QRadar 클라이언트가 설정되지 않았습니다."}, indent=2)
+    
+    response = await client.get('offenses')
+    return json.dumps(response, indent=2)
 
-    # 결과 조회
-    search_id = status_response['search_id']
-    results = client.get('search_results', search_id)
+@mcp.tool()
+async def qradar_get_offense_detail(offense_id: str) -> str:
+    """특정 offense 상세 정보 조회"""
+    if not client:
+        return json.dumps({"error": "QRadar 클라이언트가 설정되지 않았습니다."}, indent=2)
     
-    # payload 디코딩
-    decoded_events = decoder.export_packet([results])
-    
-    return decoded_events
+    response = await client.post('offense_detail', offense_id)
+    return json.dumps(response, indent=2)
 
-def integrate_offense_data(client, decoder):
-    # offense_id result + aql_query result + rule_name
+@mcp.tool()
+async def qradar_get_rule_name(rule_id: str) -> str:
+    """룰 ID로 룰 이름 조회"""
+    if not client:
+        return json.dumps({"error": "QRadar 클라이언트가 설정되지 않았습니다."}, indent=2)
     
-    # offense 값 가져오기
-    offenses = client.get('offenses')
-    
-    # logsource ID 163이 포함된 offense만 필터링
-    offense_ids = []
-    for offense_item in tqdm(offenses, desc="Offense 필터링"):
-        if any(log_source['id'] == 163 for log_source in offense_item['log_sources']):
-            offense_ids.append(offense_item['id'])
+    response = await client.get('rules', rule_id)
+    return json.dumps(response, indent=2)
 
-    # 데이터 통합하기 위한 리스트 
-    integrated_data_list = []
+@mcp.tool()
+async def qradar_search_events(start_time: str, last_updated_time: str) -> str:
+    """시간 범위로 이벤트 조회 및 payload 디코딩"""
+    if not client:
+        return json.dumps({"error": "QRadar 클라이언트가 설정되지 않았습니다."}, indent=2)
     
-    # 각 offense_id 값 post 조회
-    for offense_id in tqdm(offense_ids, desc="Offense 통합 처리"):
-        # 1. offense_id 값 post로 조회
-        offense_detail = client.post('offense_detail', offense_id)
+    try:
+        # HexDecoder 초기화
+        decoder = HexDecoder()
         
-        # aql을 위한 시간 정보 저장
-        start_time = offense_detail['start_time']
-        last_updated_time = offense_detail['last_updated_time']
+        # AQL 쿼리 생성
+        aql_query = client.create_logsourceid_aql(int(start_time), int(last_updated_time))
         
-        # start_time과 last_update_time이 같을경우 오류가남. 오류 없애기
-        if start_time >= last_updated_time:
-            print(f"WARNING: offense_id {offense_id}: 잘못된 시간 범위 - 제외")
-            continue
+        # 검색 요청
+        search_response = await client.post('search', aql_query)
+        if 'error' in search_response:
+            return json.dumps(search_response, indent=2)
         
-        # 2. rule_id - name mapping
-        rules_detail = []
-        # 각 rule 마다 반복
-        for rule in offense_detail.get('rules', []):
-            rule_id = rule['id']
-            rule_name = get_rule_name(client, rule_id)
+        cursor_id = search_response['cursor_id']
+        
+        # 검색 완료까지 대기
+        while True:
+            status_response = await client.get('search_status', cursor_id)
+            if 'error' in status_response:
+                return json.dumps(status_response, indent=2)
+                
+            if status_response['status'] == 'COMPLETED':
+                break
+            await asyncio.sleep(0.5)
+        
+        # 결과 조회
+        search_id = status_response['search_id']
+        results = await client.get('search_results', search_id)
+        
+        if 'error' in results:
+            return json.dumps(results, indent=2)
+        
+        # payload 디코딩
+        decoded_events = decoder.export_packet([results])
+        
+        return json.dumps({
+            "raw_results": results,
+            "decoded_events": decoded_events
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"error": f"이벤트 검색 중 오류: {str(e)}"}, indent=2)
+
+@mcp.tool()
+async def qradar_get_filtered_offenses() -> str:
+    """모든 offense 데이터 통합 (offense + rule names + events)"""
+    if not client:
+        return json.dumps({"error": "QRadar 클라이언트가 설정되지 않았습니다."}, indent=2)
+    
+    try:
+        # HexDecoder 초기화
+        decoder = HexDecoder()
+        
+        # offense 목록 조회
+        offenses = await client.get('offenses')
+        if 'error' in offenses:
+            return json.dumps(offenses, indent=2)
+        
+        # logsource ID 163이 포함된 offense만 필터링
+        offense_ids = []
+        for offense_item in offenses:
+            if any(log_source.get('id') == 163 for log_source in offense_item.get('log_sources', [])):
+                offense_ids.append(offense_item['id'])
+        
+        integrated_data_list = []
+        
+        # 각 offense에 대해 통합 처리
+        for offense_id in offense_ids:  # 처음 5개만 처리 (성능 고려)
+            # 1. offense 상세 정보 조회
+            offense_detail = await client.post('offense_detail', str(offense_id))
+            if 'error' in offense_detail:
+                continue
             
-            enhanced_rule = {
-                'id': rule['id'],
-                'type': rule['type'],
-                'name': rule_name
-            }
-            rules_detail.append(enhanced_rule)
-        
-        # 3. Events 정보 조회 및 payload 디코딩
-        events_data = get_events_with_payload(client, start_time, last_updated_time, decoder)
-        
-        # 4. 모든 정보 통합
-        integrated_offense = offense_detail.copy()  # 기존 모든 필드 유지
-        integrated_offense['rules'] = rules_detail  # rules에 name 추가
-        integrated_offense['events'] = events_data    # events 추가
-        
-        integrated_data_list.append(integrated_offense)
+            # 시간 검증
+            start_time = offense_detail.get('start_time')
+            last_updated_time = offense_detail.get('last_updated_time')
+            
+            if not start_time or not last_updated_time or start_time >= last_updated_time:
+                continue
+            
+            # 2. 룰 이름 매핑
+            rules_detail = []
+            for rule in offense_detail.get('rules', []):
+                rule_id = rule['id']
+                rule_info = await client.get('rules', str(rule_id))
+                
+                enhanced_rule = {
+                    'id': rule['id'],
+                    'type': rule['type'],
+                    'name': rule_info.get('name', 'Unknown') if 'error' not in rule_info else 'Error'
+                }
+                rules_detail.append(enhanced_rule)
+            
+            # 3. 이벤트 조회 (간소화)
+            aql_query = client.create_logsourceid_aql(start_time, last_updated_time)
+            search_response = await client.post('search', aql_query)
+            
+            events_data = {"status": "query_submitted"}
+            if 'error' not in search_response:
+                events_data = {"cursor_id": search_response.get('cursor_id')}
+            
+            # 4. 통합 데이터 생성
+            integrated_offense = offense_detail.copy()
+            integrated_offense['rules'] = rules_detail
+            integrated_offense['events'] = events_data
+            
+            integrated_data_list.append(integrated_offense)
 
-    return integrated_data_list
+            with open("check result","w","utf-8") as f:
+                json.dump(integrated_data_list, f, ensure_ascii=False, indent=4)
+        
+        return json.dumps({
+            "processed_count": len(integrated_data_list),
+            "total_filtered": len(offense_ids),
+            "data": integrated_data_list
+        }, indent=2, ensure_ascii=False)
+        
+    except Exception as e:
+        return json.dumps({"error": f"데이터 통합 중 오류: {str(e)}"}, indent=2)
 
-# 메인 실행 코드
+def main():
+    print("Hello from QRadar MCP Server!")
+
 if __name__ == "__main__":
-    # 클라이언트 초기화
-    SEC_TOKEN = '2cd1c231-78c8-4a4f-a972-6a3ab909d879'
-
-    # client = APIClient('https://10.10.10.20:443', SEC_TOKEN)
-    client = APIClient('https://112.216.102.242:443', SEC_TOKEN)
-    
-    # HexDecoder 초기화 (기존 코드에서 가져오기)
-    decoder = HexDecoder()
-    
-    # 통합 데이터 수집
-    integrated_data = integrate_offense_data(client, decoder)
-        
-    # 통합 결과 저장
-    with open("integrated_offense_data.json", "w", encoding="utf-8") as f:
-        json.dump(integrated_data, f, ensure_ascii=False, indent=4)
-    
+    mcp.run()
