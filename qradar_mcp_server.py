@@ -6,7 +6,7 @@ from mcp.server import Server
 from mcp.types import Tool
 from mcp.server.stdio import stdio_server
 
-# 네 기존 파일 그대로 import
+# 내 기존 파일 그대로 import
 from test_qradar import APIClient, integrate_offense_data
 from decoding_hex import HexDecoder
 
@@ -28,7 +28,7 @@ async def list_tools():
                 "required": []
             }
         )
-    ]
+]
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):

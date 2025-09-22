@@ -3,14 +3,14 @@
 /connect.py
 /decoded_hex.json
 /decoded_hex2.json
-/decoding_hex.py
+# /decoding_hex.py
 /final_decoded_hex.json
 /final_result_list.json
 /integrated_offense_data.json
 /offense_detail_list.json
 /qradar_api_connect.py
 /qradar_mcp_env
-/qradar_mcp_server.py
+# /qradar_mcp_server.py
 /qrdare_mcp_server.py
 /README.md
 /requirements.txt

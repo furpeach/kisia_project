@@ -143,8 +143,8 @@ if __name__ == "__main__":
     # 클라이언트 초기화
     SEC_TOKEN = '2cd1c231-78c8-4a4f-a972-6a3ab909d879'
 
-    client = APIClient('https://10.10.10.20:443', SEC_TOKEN)
-# client = APIClient('https://112.216.102.242:443', SEC_TOKEN)
+    # client = APIClient('https://10.10.10.20:443', SEC_TOKEN)
+    client = APIClient('https://112.216.102.242:443', SEC_TOKEN)
     
     # HexDecoder 초기화 (기존 코드에서 가져오기)
     decoder = HexDecoder()
@@ -156,4 +156,3 @@ if __name__ == "__main__":
     with open("integrated_offense_data.json", "w", encoding="utf-8") as f:
         json.dump(integrated_data, f, ensure_ascii=False, indent=4)
     
-
